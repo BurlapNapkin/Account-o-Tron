@@ -1,1 +1,1 @@
-# Account-o-Tron
+# Account-o-Tron, a flailing hobbyist's helpful spreadsheet organizer

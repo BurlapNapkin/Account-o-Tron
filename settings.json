@@ -1,0 +1,33 @@
+{
+
+"SpreadsheetID" : "SPREADSHEET HERE",
+
+"IncomeTypes" : {
+
+	"Tenant" : {
+		"Rent" : ["rent"],
+		"Utilities": ["util", "bills"],
+		"Food": ["food", "kai"]
+	},
+	
+	"Admin" : {
+		"Property" : ["property"]
+	}
+	
+},
+
+"Payments" : {
+
+	"PAYMENT NAME" : {
+		"Type" : "Tenant",
+		"Accounts" : ["ACCOUNT 1", "ACCOUNT 2"]
+	},
+	
+	"OTHER PAYMENT NAME" : {
+		"Type" : "Admin",
+		"Accounts" : ["ACCOUNT 1"]
+	}
+	
+}
+
+}
