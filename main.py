@@ -123,11 +123,12 @@ def parse(input):
 			subvalues = []
 			if subtype.type == income[item]:
 				subvalues.append(subtype.name)
-				for total in subtype.cat_totals.itervalues():
-					subvalues.append(str(total))
+				for cat in income[item].categories.iterkeys():
+					subvalues.append(str(subtype.cat_totals[cat]))
+				subvalues.append(str(subtype.cat_totals['Unknown']))
 				values.append(subvalues)
-				print 'added an account'
-				print subvalues
+				print 'added an account:'+subtype.name
+				print subtype.cat_totals
 		
 		#Line break, in spreadsheet
 		values.append([])
