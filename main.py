@@ -90,7 +90,7 @@ def parse(input):
 			pass
 		
 		#For now, all we care about is the deposits
-		if row[0] == 'Deposit' or row[0] == 'Bill Payment':
+		if row[0] == 'Deposit' or row[0] == 'Bill Payment' or row[0] == 'Direct Credit':
 			#Match a payment up to a given tenant
 			entry = 'bork'
 			for payment in payments.itervalues():
