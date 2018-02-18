@@ -4,6 +4,10 @@ import json
 import flask
 import httplib2
 
+import time
+from datetime import date
+from datetime import timedelta
+
 import google_auth
 from apiclient import discovery
 
@@ -34,6 +38,17 @@ class account():
 			self.cat_totals[cat] = 0.0
 		
 		self.cat_totals['Unknown'] = 0.0
+		
+		#set up the first 'active period'
+		self.ap = 0
+		
+		self.periods = {}
+		self.periods[self.ap] = {}
+		
+		for cat in self.type.categories.iterkeys():
+			self.periods[self.ap][cat] = 0.0
+		
+		self.periods[self.ap]['Unknown'] = 0.0
 
 	#Compare all of the category keys to the comments string to categorize the payment
 	def check(self, comments, ammount):
@@ -45,7 +60,16 @@ class account():
 					break
 		
 		self.cat_totals[category] += ammount
-				
+		self.periods[self.ap][category] += ammount
+		
+	def new_period(self):
+		self.ap +=1
+		self.periods[self.ap] = {}
+		
+		for cat in self.type.categories.iterkeys():
+			self.periods[self.ap][cat] = 0.0
+		
+		self.periods[self.ap]['Unknown'] = 0.0
 		
 class incometype():
 	
@@ -82,12 +106,31 @@ def parse(input):
 	csvfile = csv.reader(input)
 	
 	initialized = False
+	next_date = None
+	period_count = 0
 	
 	for row in csvfile:
 		if initialized == False:
 			initialized = True
 			#Could set up an iterator here to dynamically detect data sorting, but we use a specific format for input
-			pass
+			continue
+		
+		#Time management, gets the date of the current transaction and compares to the time step
+		ds = row[6].split('/')
+		current = date(int(ds[2]), int(ds[1]), int(ds[0]))
+		if next_date == None:
+			next_date = current - timedelta(days=7)
+			
+		#If we're past the time step, start a new period for all defined payments
+		elif current <= next_date:
+			for payment in payments.itervalues():
+				payment.new_period()
+				
+			next_date = current - timedelta(days=7)
+			period_count += 1
+			
+			print 'week '+str(period_count)+', next week is:'
+			print next_date
 		
 		#For now, all we care about is the deposits
 		if row[0] == 'Deposit' or row[0] == 'Bill Payment' or row[0] == 'Direct Credit':
@@ -128,7 +171,27 @@ def parse(input):
 				subvalues.append(str(subtype.cat_totals['Unknown']))
 				values.append(subvalues)
 				print 'added an account:'+subtype.name
-				print subtype.cat_totals
+				for week in subtype.periods.iterkeys():
+					print 'week '+str(week+1)
+					print subtype.periods[week]
+		
+		i = 0
+		while i <= period_count:
+			
+			#Line break, in spreadsheet
+			values.append([])
+			values.append(['Week '+str(i)])
+			
+			for subtype in payments.itervalues():
+				subvalues = []
+				if subtype.type == income[item]:
+					subvalues.append(subtype.name)
+					for cat in income[item].categories.iterkeys():
+						subvalues.append(str(subtype.periods[i][cat]))
+					subvalues.append(str(subtype.periods[i]['Unknown']))
+					values.append(subvalues)
+					
+			i += 1
 		
 		#Line break, in spreadsheet
 		values.append([])
