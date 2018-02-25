@@ -21,6 +21,7 @@ main_dir = sys.path[0]
 #Define a dictionary for tenants, we'll need this later
 income = {}
 payments = {}
+expenditures = []
 
 #This is a class used to hold data from 
 class account():
@@ -80,6 +81,43 @@ class incometype():
 		
 		for key in keywords.iterkeys():
 			self.categories[key] = keywords[key]
+
+class expenditure():
+
+	def __init__(self, name, accounts):
+		self.name = name
+		
+		self.accounts = []
+		for account in accounts:
+			self.accounts.append(account)
+		
+		self.total = 0.0
+		
+		#set up the first 'active period'
+		self.ap = 0
+		
+		self.periods = {}
+		self.periods[self.ap] = 0.0
+		
+	def new_period(self):
+		self.ap +=1
+		self.periods[self.ap] = 0.0
+		
+class transaction_unknown():
+	
+	def __init__(self):
+	
+		self.transactions = {}
+		self.total = 0.0
+	
+	def sort(self, account, ammount):
+		
+		if account in self.transactions.iterkeys():
+			self.transactions[account] += ammount
+		else:
+			self.transactions[account] = ammount
+		
+		self.total += ammount
 		
 #Parse the settings ini and create our tennants
 configfile = open(os.path.join('settings.json'))
@@ -91,15 +129,27 @@ spreadsheet = config['SpreadsheetID']
 for type in config['IncomeTypes'].iterkeys():
 	income[type] = incometype(type, config['IncomeTypes'][type])
 
+unknown_income = transaction_unknown()
+
 print 'Income Types'
 print income
 
 for payment in config['Payments'].iterkeys():
 	dict = config['Payments'][payment]
 	payments[payment] = account(payment, dict['Accounts'], income[dict['Type']])
+	
+unknown_expenditure = transaction_unknown()
 
-print 'Payments'
+print 'Payments:'
 print payments
+
+for ex in config['ExpenditureTypes'].iterkeys():
+	dict = config['ExpenditureTypes'][ex]
+	expenditures.append(expenditure(ex, dict['Accounts']))
+	
+print 'ExpenditureTypes:'
+for item in expenditures:
+	print item.name
 
 #The main loop for the import step, go over every line in the csv and figure out what to do with them
 def parse(input):
@@ -125,6 +175,8 @@ def parse(input):
 		elif current <= next_date:
 			for payment in payments.itervalues():
 				payment.new_period()
+			for ex in expenditures:
+				ex.new_period()
 				
 			next_date = current - timedelta(days=7)
 			period_count += 1
@@ -132,7 +184,7 @@ def parse(input):
 			print 'week '+str(period_count)+', next week is:'
 			print next_date
 		
-		#For now, all we care about is the deposits
+		#Is this income? If so sort it through our income filters
 		if row[0] == 'Deposit' or row[0] == 'Bill Payment' or row[0] == 'Direct Credit':
 			#Match a payment up to a given tenant
 			entry = 'bork'
@@ -141,15 +193,55 @@ def parse(input):
 					if row[1] == account:
 						entry = payment
 						break
+				if entry != 'bork':
+					break
 			
 			#If we have a matching account, sort the payment
 			if entry != 'bork':
 				notes = str(row[2]+' '+row[3]+' '+row[4]).lower()
 				entry.check(notes, float(row[5]))
+			else:
+				unknown_income.sort(row[1], float(row[5]))
+		
+		#Is this an expenditure? If so sort it through our expenditure filters
+		else:
+			entry = 'bork'
+			for ex in expenditures:
+				for account in ex.accounts:
+					if account in row[1]:
+						entry = ex
+						break
+				if entry != 'bork':
+					break
+					
+			if entry != 'bork':
+				entry.total += float(row[5])
+				entry.periods[entry.ap] += float(row[5])
+			else:
+				unknown_expenditure.sort(row[1], float(row[5]))
+			
+			
 	
 	#Set up headers in our spreadsheet
 	range = 'Sheet1!A1:E'
 	row = 1
+	values = [['Unknown Income','Ammount']]
+	
+	for account in unknown_income.transactions.iterkeys():
+		subvalues = []
+		subvalues.append(account)
+		subvalues.append(unknown_income.transactions[account])
+		values.append(subvalues)
+	
+	values.append(['TOTAL', str(unknown_income.total)])
+	
+	#Line break, in spreadsheet
+	values.append([])
+
+	range = 'Sheet1!A'+str(row)+':E'
+	output_data(range, values)
+	row += len(values)
+	
 	for item in income.iterkeys():
 		#Set up major income type header
 		values = [[item]]
@@ -171,9 +263,6 @@ def parse(input):
 				subvalues.append(str(subtype.cat_totals['Unknown']))
 				values.append(subvalues)
 				print 'added an account:'+subtype.name
-				for week in subtype.periods.iterkeys():
-					print 'week '+str(week+1)
-					print subtype.periods[week]
 		
 		i = 0
 		while i <= period_count:
@@ -199,6 +288,61 @@ def parse(input):
 		range = 'Sheet1!A'+str(row)+':E'
 		output_data(range, values)
 		row += len(values)
+		
+	#EXPENDITURE OUTPUT
+		
+	#Set up headers in our spreadsheet
+	range = 'Sheet1!H1:M'
+	row = 1
+	values = [['Unknown Expenditure','Ammount']]
+	
+	for account in unknown_expenditure.transactions.iterkeys():
+		subvalues = []
+		subvalues.append(account)
+		subvalues.append(unknown_expenditure.transactions[account])
+		values.append(subvalues)
+	
+	values.append(['TOTAL', str(unknown_expenditure.total)])
+	
+	#Line break, in spreadsheet
+	values.append([])
+	
+	values.append(['Known Expenditures'])
+	
+	subvalues = []
+	for ex in expenditures:
+		subvalues.append(ex.name)
+	values.append(subvalues)
+	subvalues = []
+	for ex in expenditures:
+		subvalues.append(ex.total)
+	values.append(subvalues)
+	
+	#Do weekly expenditures
+	i = 0
+	while i <= period_count:
+		
+		#Line break, in spreadsheet
+		values.append([])
+		values.append(['Week '+str(i)])
+		
+		subvalues = []
+		for ex in expenditures:
+			subvalues.append(ex.name)
+		values.append(subvalues)
+		subvalues = []
+		for ex in expenditures:
+			subvalues.append(ex.periods[i])
+		values.append(subvalues)
+				
+		i += 1
+	
+	#Output the whole expenditures block
+	range = 'Sheet1!H'+str(row)+':M'
+	output_data(range, values)
+	row += len(values)
+	
+	
 		
 
 def output_data(target_range, data):
