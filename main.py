@@ -18,6 +18,12 @@ from apiclient import discovery
 #Set up our filepaths
 main_dir = sys.path[0]
 
+#Our google sheets API credentials
+credentials = google_auth.get_credentials()
+http = credentials.authorize(httplib2.Http())
+discoveryUrl = ('https://sheets.googleapis.com/$discovery/rest?' 'version=v4')
+service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discoveryUrl)
+
 #Define a dictionary for tenants, we'll need this later
 income = {}
 payments = {}
@@ -26,7 +32,7 @@ expenditures = []
 #This is a class used to hold data from 
 class account():
 
-	def __init__(self, name, accounts, incometype):
+	def __init__(self, name, accounts, incometype, expected=False):
 		self.name = name
 		self.type = incometype
 		
@@ -37,8 +43,17 @@ class account():
 		self.cat_totals = {}
 		for cat in self.type.categories.iterkeys():
 			self.cat_totals[cat] = 0.0
+			
+		self.expected = {}
+		if expected != False:
+			for cat in expected.iterkeys():
+				self.expected[cat] = float(expected[cat])
+			self.expected_total = sum(self.expected.itervalues())
+			
 		
 		self.cat_totals['Unknown'] = 0.0
+		
+		self.unknowns = {}
 		
 		#set up the first 'active period'
 		self.ap = 0
@@ -56,12 +71,17 @@ class account():
 		category = 'Unknown'
 		for cat in self.type.categories.iterkeys():
 			for key in self.type.categories[cat]:
-				if comments.find(key) > 0:
+				if comments.find(key) >= 0:
 					category = cat
 					break
 		
 		self.cat_totals[category] += ammount
 		self.periods[self.ap][category] += ammount
+		if category == 'Unknown':
+			if comments in self.unknowns.iterkeys():
+				self.unknowns[comments] += ammount
+			else:
+				self.unknowns[comments] = ammount
 		
 	def new_period(self):
 		self.ap +=1
@@ -71,6 +91,30 @@ class account():
 			self.periods[self.ap][cat] = 0.0
 		
 		self.periods[self.ap]['Unknown'] = 0.0
+	
+	def self_report(self):
+		#Generate a report of this objects transactions compared to expectations
+		self.report = [[self.Name]]
+		
+		i = 0
+		while i <= len(self.periods.iterkeys()):
+			#Start with a line break
+			values.append([])
+			values.append(['Week '+str(i)])
+			
+			for subtype in payments.itervalues():
+				subvalues = []
+				if subtype.type == income[item]:
+					subvalues.append(subtype.name)
+					for cat in income[item].categories.iterkeys():
+						subvalues.append(str(subtype.periods[i][cat]))
+					subvalues.append(str(subtype.periods[i]['Unknown']))
+					values.append(subvalues)
+					
+			i += 1
+		
+		return self.report
+		
 		
 class incometype():
 	
@@ -125,6 +169,7 @@ config = json.loads(configfile.read())
 
 #Establish our spreadsheet ID for posting to google drive
 spreadsheet = config['SpreadsheetID']
+spreadsheet_id = spreadsheet
 
 for type in config['IncomeTypes'].iterkeys():
 	income[type] = incometype(type, config['IncomeTypes'][type])
@@ -136,7 +181,10 @@ print income
 
 for payment in config['Payments'].iterkeys():
 	dict = config['Payments'][payment]
-	payments[payment] = account(payment, dict['Accounts'], income[dict['Type']])
+	if 'Expected' in dict.iterkeys():
+		payments[payment] = account(payment, dict['Accounts'], income[dict['Type']], dict['Expected'])
+	else:
+		payments[payment] = account(payment, dict['Accounts'], income[dict['Type']])
 	
 unknown_expenditure = transaction_unknown()
 
@@ -152,12 +200,18 @@ for item in expenditures:
 	print item.name
 
 #The main loop for the import step, go over every line in the csv and figure out what to do with them
+period_count = 0
 def parse(input):
 	csvfile = csv.reader(input)
 	
 	initialized = False
 	next_date = None
-	period_count = 0
+	#reset all objects to period 0
+	period = 0
+	for payment in payments.itervalues():
+		payment.ap = 0
+	for ex in expenditures:
+		ex.ap = 0
 	
 	for row in csvfile:
 		if initialized == False:
@@ -173,15 +227,21 @@ def parse(input):
 			
 		#If we're past the time step, start a new period for all defined payments
 		elif current <= next_date:
-			for payment in payments.itervalues():
-				payment.new_period()
-			for ex in expenditures:
-				ex.new_period()
-				
 			next_date = current - timedelta(days=7)
-			period_count += 1
+			period += 1
 			
-			print 'week '+str(period_count)+', next week is:'
+			for payment in payments.itervalues():
+				if period not in payment.periods.iterkeys():
+					payment.new_period()
+				else:
+					payment.ap = period
+			for ex in expenditures:
+				if period not in ex.periods.iterkeys():
+					ex.new_period()
+				else:
+					ex.ap = period
+			
+			print 'week '+str(period)+', next week is:'
 			print next_date
 		
 		#Is this income? If so sort it through our income filters
@@ -219,9 +279,13 @@ def parse(input):
 				entry.periods[entry.ap] += float(row[5])
 			else:
 				unknown_expenditure.sort(row[1], float(row[5]))
+		
+	global period_count
+	if period_count < period:
+		period_count = period
 			
 			
-	
+def build_spreadsheet():	
 	#Set up headers in our spreadsheet
 	range = 'Sheet1!A1:E'
 	row = 1
@@ -341,20 +405,86 @@ def parse(input):
 	range = 'Sheet1!H'+str(row)+':M'
 	output_data(range, values)
 	row += len(values)
+
+	#Set up a sub page for each payee
+	requests = {'requests' : []}
+	index = 2
+	for payee in payments.itervalues():
+		requests['requests'].append({'addSheet' : {'properties' : {'title': payee.name, 'index' : index}}})
+		index += 1
+	result = service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
 	
-	
+	#Populate the subpage with data
+	for payee in payments.itervalues():
+		range = payee.name+'!A1:F'
+		
+		values = [[payee.name]]
+		balance = sum(payee.cat_totals.itervalues()) - (sum(payee.expected.itervalues())*period_count)
+		values.append([balance])
+		
+		#Week by week report
+		i = 0
+		while i <= period_count:
+			
+			#Line break, in spreadsheet
+			values.append([])
+			
+			subvalues = []
+			subvalues.append('Week '+str(i))
+			for cat in income[payee.type.name].categories.iterkeys():
+				subvalues.append(cat)
+			subvalues.append('Unknown')
+			subvalues.append('Balance')
+			values.append(subvalues)
+			
+			subvalues = []
+			subvalues.append('Payments')
+			for cat in income[payee.type.name].categories.iterkeys():
+				subvalues.append(str(payee.periods[i][cat]))
+			subvalues.append(str(payee.periods[i]['Unknown']))
+			values.append(subvalues)
+			
+			if payee.expected != False:
+				subvalues = []
+				subvalues.append('Expected')				
+				for cat in income[payee.type.name].categories.iterkeys():
+					if cat in payee.expected.iterkeys():
+						subvalues.append(payee.expected[cat])
+					else:
+						subvalues.append(0.0)
+				
+				#Do total here
+				balance = sum(payee.periods[i].itervalues()) - sum(payee.expected.itervalues())
+				#space for the Unknown column
+				subvalues.append('-')
+				subvalues.append(balance)
+				values.append(subvalues)
+					
+			i += 1
+		
+		output_data(range, values)
+		
+		if len(payee.unknowns) > 0:
+			range = payee.name+'!H1:M'
+			
+			values = [['Unknown Type', 'Total']]
+			
+			for unknown in payee.unknowns.iterkeys():
+				subvalues = []
+				subvalues.append(unknown)
+				subvalues.append(payee.unknowns[unknown])
+				values.append(subvalues)
+			
+			output_data(range, values)
+		
+		
 		
 
 def output_data(target_range, data):
-	credentials = google_auth.get_credentials()
-	http = credentials.authorize(httplib2.Http())
-	discoveryUrl = ('https://sheets.googleapis.com/$discovery/rest?' 'version=v4')
-	service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discoveryUrl)
 	
 	values = data
 	body = {'values':values}
-
-	spreadsheet_id = spreadsheet
+	
 	range_name = target_range
 	value_input_option = 'RAW'
 	insert_data_option = 'OVERWRITE'
@@ -383,5 +513,36 @@ def output_data(target_range, data):
 data = raw_input('Give me a CSV:')
 assert os.path.exists(data), "I did not find the file at, "+str(data)
 file = open(data,'r+')
+
+#Get a list of all sheets in the spreadsheet
+sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+sheets = []
+for item in sheet_metadata.get('sheets', ''):
+	sheets.append(item['properties'])
+
+#Generate a request to delete all sheets but the primary, and clear the primary sheet
+requests = {'requests' : []}
+for item in sheets:
+	if item['index'] !=  0:
+		requests['requests'].append({'deleteSheet' : {'sheetId':item['sheetId']}})
+	else:
+		requests['requests'].append({'updateCells' : {'range' : {'sheetId':item['sheetId']}, 'fields' : 'userEnteredValue'}})
+
+result = service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
+
+#Start generating the new datasheets
 parse(file)
 file.close()
+
+loading = True
+while loading == True:
+	data = raw_input('Additional CSV or \'go\' :')
+
+	if data == 'go':
+		loading = False
+		build_spreadsheet()
+	else:
+		assert os.path.exists(data), "I did not find the file at, "+str(data)
+		file = open(data,'r+')
+		parse(file)
+		file.close()
