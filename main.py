@@ -200,12 +200,13 @@ for item in expenditures:
 	print item.name
 
 #The main loop for the import step, go over every line in the csv and figure out what to do with them
-period_count = 0
+period_count = {0 : ''}
 def parse(input):
 	csvfile = csv.reader(input)
 	
 	initialized = False
 	next_date = None
+	global period_count
 	#reset all objects to period 0
 	period = 0
 	for payment in payments.itervalues():
@@ -224,11 +225,14 @@ def parse(input):
 		current = date(int(ds[2]), int(ds[1]), int(ds[0]))
 		if next_date == None:
 			next_date = current - timedelta(days=7)
+			period_count[0] = current
 			
 		#If we're past the time step, start a new period for all defined payments
 		elif current <= next_date:
 			next_date = current - timedelta(days=7)
 			period += 1
+			if period not in period_count.iterkeys():
+				period_count[period] = current
 			
 			for payment in payments.itervalues():
 				if period not in payment.periods.iterkeys():
@@ -279,10 +283,6 @@ def parse(input):
 				entry.periods[entry.ap] += float(row[5])
 			else:
 				unknown_expenditure.sort(row[1], float(row[5]))
-		
-	global period_count
-	if period_count < period:
-		period_count = period
 			
 			
 def build_spreadsheet():	
@@ -329,11 +329,11 @@ def build_spreadsheet():
 				print 'added an account:'+subtype.name
 		
 		i = 0
-		while i <= period_count:
+		while i < len(period_count):
 			
 			#Line break, in spreadsheet
 			values.append([])
-			values.append(['Week '+str(i)])
+			values.append([str(period_count[i])])
 			
 			for subtype in payments.itervalues():
 				subvalues = []
@@ -384,11 +384,11 @@ def build_spreadsheet():
 	
 	#Do weekly expenditures
 	i = 0
-	while i <= period_count:
+	while i < len(period_count):
 		
 		#Line break, in spreadsheet
 		values.append([])
-		values.append(['Week '+str(i)])
+		values.append([str(period_count[i])])
 		
 		subvalues = []
 		for ex in expenditures:
@@ -419,18 +419,18 @@ def build_spreadsheet():
 		range = payee.name+'!A1:F'
 		
 		values = [[payee.name]]
-		balance = sum(payee.cat_totals.itervalues()) - (sum(payee.expected.itervalues())*period_count)
+		balance = sum(payee.cat_totals.itervalues()) - (sum(payee.expected.itervalues())*len(period_count))
 		values.append([balance])
 		
 		#Week by week report
 		i = 0
-		while i <= period_count:
+		while i < len(period_count):
 			
 			#Line break, in spreadsheet
 			values.append([])
 			
 			subvalues = []
-			subvalues.append('Week '+str(i))
+			subvalues.append(str(period_count[i]))
 			for cat in income[payee.type.name].categories.iterkeys():
 				subvalues.append(cat)
 			subvalues.append('Unknown')
