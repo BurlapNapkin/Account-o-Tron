@@ -2,27 +2,33 @@ import math, sys, os, string, csv
 import ConfigParser
 import json
 import flask
-import httplib2
 
 import time
 from datetime import date
 from datetime import timedelta
 
 import google_auth
-from apiclient import discovery
+from googleapiclient import discovery
+from oauth2client import file, client, tools
+from httplib2 import Http
 
-#flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(os.path.join('client_secret.json'), scopes=['https://www.googleapis.com/auth/spreadsheets'])
-#flow.redirect_uri = 'http://localhost:8080'
-#authorization_url, state = flow.authorization_url(access_type='offline', include_granted_scopes='true')
+
+# If modifying these scopes, delete the file token.json.
+SCOPES = 'https://www.googleapis.com/auth/spreadsheets'
+
+# The file token.json stores the user's access and refresh tokens, and is
+# created automatically when the authorization flow completes for the first
+# time.
+store = file.Storage('token.json')
+creds = store.get()
+if not creds or creds.invalid:
+	flow = client.flow_from_clientsecrets('client_secret.json', SCOPES)
+	creds = tools.run_flow(flow, store)
+service = discovery.build('sheets', 'v4', http=creds.authorize(Http()))
+
 
 #Set up our filepaths
 main_dir = sys.path[0]
-
-#Our google sheets API credentials
-credentials = google_auth.get_credentials()
-http = credentials.authorize(httplib2.Http())
-discoveryUrl = ('https://sheets.googleapis.com/$discovery/rest?' 'version=v4')
-service = discovery.build('sheets', 'v4', http=http, discoveryServiceUrl=discoveryUrl)
 
 #Define a dictionary for tenants, we'll need this later
 income = {}
@@ -510,9 +516,8 @@ def output_data(target_range, data):
 
 			
 #Wait for the user to provide a csv path for us to use
-data = raw_input('Give me a CSV:')
-assert os.path.exists(data), "I did not find the file at, "+str(data)
-file = open(data,'r+')
+assert os.path.exists(os.path.join('.', 'input')), "Input folder is not correctly configured, please include a folder in this directory named input."
+data = raw_input('Input anything to continue:')
 
 #Get a list of all sheets in the spreadsheet
 sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
@@ -530,19 +535,12 @@ for item in sheets:
 
 result = service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body=requests).execute()
 
+inputdir = os.path.join('.', 'input')
 #Start generating the new datasheets
-parse(file)
-file.close()
-
-loading = True
-while loading == True:
-	data = raw_input('Additional CSV or \'go\' :')
-
-	if data == 'go':
-		loading = False
-		build_spreadsheet()
-	else:
-		assert os.path.exists(data), "I did not find the file at, "+str(data)
-		file = open(data,'r+')
+for directory, subdirectory, files in os.walk(inputdir):
+	for input in files:
+		file = open(os.path.join(inputdir, input),'r+')
 		parse(file)
 		file.close()
+	
+build_spreadsheet()
